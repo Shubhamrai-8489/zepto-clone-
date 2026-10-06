@@ -341,3 +341,10 @@ body.has-cart #footer { padding-bottom: 96px; }
   * { animation: none !important; transition: none !important; }
 }
 .d-foot .btn span { text-align: left; }
+
+/* ---------- Shop-driven stock, address, delivery code ---------- */
+.add:disabled { border-color: var(--line); background: var(--bg); color: var(--muted); cursor: not-allowed; padding: 0 8px; font-size: 13px; }
+.svc { margin-top: 14px; }
+.addr { display: grid; gap: 8px; margin: 10px 0; }
+.code { font: 800 34px/1.1 var(--display); letter-spacing: .18em; color: var(--blue); margin: 2px 0 4px; }
+.badge.bad { background: #FDE7E7; color: var(--red); }

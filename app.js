@@ -3,15 +3,14 @@ const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const rs = n => '₹' + n;
 
-const store = {
-  get(k, d) { try { return JSON.parse(localStorage.getItem('jp_' + k)) ?? d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem('jp_' + k, JSON.stringify(v)); } catch { /* private mode: state stays in memory */ } },
-};
+const store = db; // shared with the partner app, see shared.js
+seedData();
 const state = {
   cart: store.get('cart', {}),
   user: store.get('user', null),
   loc: store.get('loc', null),
-  orders: store.get('orders', []),
+  get orders() { return store.get('orders', []); }, // always fresh: the partner app updates these
+  addr: store.get('addr', { house: '', street: '', landmark: '' }),
   coupon: store.get('coupon', null),
   pay: 'upi',
 };
@@ -19,9 +18,17 @@ const byId = Object.fromEntries(PRODUCTS.map(p => [p.id, p]));
 const catById = Object.fromEntries(CATS.map(c => [c.id, c]));
 const MAX_QTY = 9, FREE_DELIVERY = 199, DELIVERY_FEE = 25, HANDLING = 4;
 const COUPON = { code: 'JHATPAT50', off: 50, min: 299 };
-const TRACK_SECONDS = 60; // demo: a whole delivery plays out in one minute
-const STAGES = ['Order placed', 'Packing your items', 'On the way', 'Delivered'];
-const PLACES = ['Sector 50, Gurugram', 'Indiranagar, Bengaluru', 'Andheri West, Mumbai', 'Koregaon Park, Pune', 'Salt Lake, Kolkata', 'Gomti Nagar, Lucknow', 'Banjara Hills, Hyderabad', 'Anna Nagar, Chennai', 'Vaishali Nagar, Jaipur', 'Satellite, Ahmedabad', 'Civil Lines, Prayagraj', 'Hazratganj, Lucknow'];
+const STATUS = { placed: 'Waiting for the shop', accepted: 'Being packed', ready: 'Packed', picked: 'On the way', delivered: 'Delivered', rejected: 'Cancelled by the shop' };
+const STEPS = [['placed', 'Order placed'], ['accepted', 'Shop accepted and is packing'], ['ready', 'Packed and ready'], ['picked', 'Picked up, on the way'], ['delivered', 'Delivered']];
+const statusOf = o => o.status || 'delivered'; // orders from before the partner app had no status
+
+/* ---------- Shop for the chosen area: prices and stock come from it ---------- */
+let INV = null; // that shop's stock, refreshed on every render; null = no shop, show the base catalogue
+const shop = () => (state.loc ? shopForArea(state.loc) : null);
+const refreshInv = () => { const sh = shop(); INV = sh ? (db.get('inv', {})[sh.id] || {}) : null; };
+const pr = p => INV?.[p.id]?.price ?? p.price;
+const stock = p => (INV ? (INV[p.id]?.on ? INV[p.id].qty : 0) : MAX_QTY);
+const catalog = () => (INV ? PRODUCTS.filter(p => INV[p.id]) : PRODUCTS);
 const HINTS = ['milk', 'bread', 'maggi', 'chips', 'tomato', 'chocolate', 'atta', 'cold drink'];
 
 const ICONS = {
@@ -39,7 +46,7 @@ const icon = n => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="curr
 /* ---------- Cart maths ---------- */
 function bill() {
   const items = Object.entries(state.cart).map(([id, q]) => ({ p: byId[id], q })).filter(x => x.p);
-  const sub = items.reduce((s, x) => s + x.p.price * x.q, 0);
+  const sub = items.reduce((s, x) => s + pr(x.p) * x.q, 0);
   const mrp = items.reduce((s, x) => s + x.p.mrp * x.q, 0);
   const count = items.reduce((s, x) => s + x.q, 0);
   const delivery = !sub || sub >= FREE_DELIVERY ? 0 : DELIVERY_FEE;
@@ -49,28 +56,30 @@ function bill() {
 }
 function setQty(id, q) {
   if (q > MAX_QTY) return toast(`You can add up to ${MAX_QTY} of one item`);
+  if (q > (state.cart[id] || 0) && q > stock(byId[id])) return toast(stock(byId[id]) > 0 ? `Only ${stock(byId[id])} left in stock` : 'This item just went out of stock');
   if (q <= 0) delete state.cart[id]; else state.cart[id] = q;
   store.set('cart', state.cart);
   syncCart();
 }
 
 /* ---------- Small templates ---------- */
-const offPct = p => Math.round((1 - p.price / p.mrp) * 100);
+const offPct = p => Math.round((1 - pr(p) / p.mrp) * 100);
 function ctl(p) {
   const q = state.cart[p.id] || 0;
+  if (!q && stock(p) <= 0) return '<button class="add" disabled>Sold out</button>';
   return q
     ? `<div class="step"><button data-act="dec" data-id="${p.id}" aria-label="Remove one ${esc(p.name)}">−</button><span>${q}</span><button data-act="inc" data-id="${p.id}" aria-label="Add one more ${esc(p.name)}">+</button></div>`
     : `<button class="add" data-act="inc" data-id="${p.id}" aria-label="Add ${esc(p.name)} to cart">Add</button>`;
 }
 function card(p) {
   return `<article class="card">
-    <a class="card-img" href="#/p/${p.id}" tabindex="-1" aria-hidden="true"><img loading="lazy" src="${p.img}" alt="">${p.mrp > p.price ? `<span class="off">${offPct(p)}% off</span>` : ''}</a>
+    <a class="card-img" href="#/p/${p.id}" tabindex="-1" aria-hidden="true"><img loading="lazy" src="${p.img}" alt="">${p.mrp > pr(p) ? `<span class="off">${offPct(p)}% off</span>` : ''}</a>
     <div class="card-body">
       <span class="eta">${BRAND.eta} min</span>
       <a class="card-name" href="#/p/${p.id}">${esc(p.name)}</a>
       <span class="unit">${esc(p.unit)}</span>
       <div class="card-foot">
-        <div class="price"><b>${rs(p.price)}</b>${p.mrp > p.price ? `<s>${rs(p.mrp)}</s>` : ''}</div>
+        <div class="price"><b>${rs(pr(p))}</b>${p.mrp > pr(p) ? `<s>${rs(p.mrp)}</s>` : ''}</div>
         <div data-ctl="${p.id}">${ctl(p)}</div>
       </div>
     </div>
@@ -83,10 +92,10 @@ const billRows = b => `
   <div class="row"><span>Handling fee</span><span>${rs(b.handling)}</span></div>
   ${b.disc ? `<div class="row"><span>Coupon ${COUPON.code}</span><span class="free">−${rs(b.disc)}</span></div>` : ''}
   <div class="row total"><span>To pay</span><span>${rs(b.total)}</span></div>`;
-const lineItem = (p, q, editable) => `<div class="line">
+const lineItem = (p, q, editable, price = pr(p)) => `<div class="line">
     <img src="${p.img}" alt="">
     <div><b>${esc(p.name)}</b><small>${esc(p.unit)}${editable ? '' : ` × ${q}`}</small></div>
-    <div class="line-end">${editable ? `<div data-ctl="${p.id}">${ctl(p)}</div>` : ''}<strong>${rs(p.price * q)}</strong></div>
+    <div class="line-end">${editable ? `<div data-ctl="${p.id}">${ctl(p)}</div>` : ''}<strong>${rs(price * q)}</strong></div>
   </div>`;
 const emptyState = (title, text, action) => `<div class="empty"><h2>${title}</h2><p>${text}</p>${action}</div>`;
 
@@ -116,7 +125,7 @@ function renderShell() {
     .map(([h, i, l]) => `<a href="${h}" data-nav="${h}">${icon(i)}${l}</a>`).join('');
   $('#footer').innerHTML = `<div class="wrap foot">
       <div><h3>${BRAND.name}</h3><p>Groceries and daily needs at your door in about ${BRAND.eta} minutes. This is a demo store: nothing is charged and nothing ships.</p></div>
-      <div><h3>Shop by category</h3><div class="foot-links">${CATS.map(c => `<a href="#/c/${c.id}">${c.name}</a>`).join('')}<button data-act="help">Help</button></div>
+      <div><h3>Shop by category</h3><div class="foot-links">${CATS.map(c => `<a href="#/c/${c.id}">${c.name}</a>`).join('')}<button data-act="help">Help</button><a href="partner/">Sell or deliver with ${BRAND.name}</a></div>
       <p style="margin-top:12px">Product photos: Open Food Facts contributors (CC BY-SA) and TheMealDB.</p></div>
     </div>`;
   syncHeader();
@@ -131,6 +140,7 @@ function syncHeader() {
   $('#acct').setAttribute('aria-label', state.user ? 'Account' : 'Log in');
 }
 function syncCart() {
+  refreshInv();
   const b = bill();
   document.querySelectorAll('[data-ctl]').forEach(el => { el.innerHTML = ctl(byId[el.dataset.ctl]); });
   $('#hcart').innerHTML = b.count ? `${icon('cart')}<span><small>${b.count} item${b.count > 1 ? 's' : ''}</small><b>${rs(b.sub)}</b></span>` : `${icon('cart')}<b>My cart</b>`;
@@ -144,7 +154,7 @@ function syncCart() {
 const pages = {
   home() {
     const pick = id => byId[id]?.img;
-    return `<div class="wrap">
+    return `<div class="wrap">${serviceNote()}
       <section class="hero">
         <div class="hero-copy">
           <h1>Groceries in <span>${BRAND.eta} minutes</span>, not an hour.</h1>
@@ -156,7 +166,7 @@ const pages = {
       <div class="offers">${OFFERS.map(o => `<a class="offer" href="${o.href}"><div><h3>${o.title}</h3><p>${o.text}</p><u>${o.cta}</u></div><img src="${pick(o.img)}" alt=""></a>`).join('')}</div>
       <section class="sec"><div class="sec-head"><h2>Shop by category</h2></div>${tiles()}</section>
       ${CATS.map(c => `<section class="sec"><div class="sec-head"><h2>${c.name}</h2><a href="#/c/${c.id}" aria-label="See all ${c.name}">See all</a></div>
-        <div class="rail">${PRODUCTS.filter(p => p.cat === c.id).slice(0, 10).map(card).join('')}</div></section>`).join('')}
+        <div class="rail">${catalog().filter(p => p.cat === c.id).slice(0, 10).map(card).join('')}</div></section>`).join('')}
     </div>`;
   },
   categories() {
@@ -166,12 +176,12 @@ const pages = {
     const c = catById[catId];
     if (!c) return pages.notFound();
     const sub = c.subs.find(s => s.id === subId);
-    let list = PRODUCTS.filter(p => p.cat === c.id && (!sub || p.sub === sub.id));
+    let list = catalog().filter(p => p.cat === c.id && (!sub || p.sub === sub.id));
     const sort = sessionSort;
-    if (sort === 'low') list = [...list].sort((a, b) => a.price - b.price);
-    if (sort === 'high') list = [...list].sort((a, b) => b.price - a.price);
+    if (sort === 'low') list = [...list].sort((a, b) => pr(a) - pr(b));
+    if (sort === 'high') list = [...list].sort((a, b) => pr(b) - pr(a));
     if (sort === 'off') list = [...list].sort((a, b) => offPct(b) - offPct(a));
-    const subImg = s => PRODUCTS.find(p => p.cat === c.id && p.sub === s.id)?.img || c.img;
+    const subImg = s => catalog().find(p => p.cat === c.id && p.sub === s.id)?.img || c.img;
     document.title = `${c.name} — ${BRAND.name}`;
     return `<div class="wrap">
       <p class="crumbs"><a href="#/">Home</a> › ${sub ? `<a href="#/c/${c.id}">${c.name}</a> › ${sub.name}` : c.name}</p>
@@ -193,7 +203,7 @@ const pages = {
     const p = byId[id];
     if (!p) return pages.notFound();
     const c = catById[p.cat];
-    const similar = PRODUCTS.filter(x => x.cat === p.cat && x.id !== p.id).sort((a, b) => (b.sub === p.sub) - (a.sub === p.sub)).slice(0, 10);
+    const similar = catalog().filter(x => x.cat === p.cat && x.id !== p.id).sort((a, b) => (b.sub === p.sub) - (a.sub === p.sub)).slice(0, 10);
     document.title = `${p.name} — ${BRAND.name}`;
     return `<div class="wrap">
       <p class="crumbs"><a href="#/">Home</a> › <a href="#/c/${c.id}">${c.name}</a> › ${esc(p.name)}</p>
@@ -203,7 +213,7 @@ const pages = {
           <span class="rating">★ ${p.rating} (${p.reviews})</span>
           <h1>${esc(p.name)}</h1>
           <p class="sub">${esc(p.brand)} · ${esc(p.unit)}</p>
-          <div class="pdp-price"><b>${rs(p.price)}</b>${p.mrp > p.price ? `<s>MRP ${rs(p.mrp)}</s><em>${rs(p.mrp - p.price)} off</em>` : ''}</div>
+          <div class="pdp-price"><b>${rs(pr(p))}</b>${p.mrp > pr(p) ? `<s>MRP ${rs(p.mrp)}</s><em>${rs(p.mrp - pr(p))} off</em>` : ''}</div>
           <p class="sub">Inclusive of all taxes</p>
           <div class="pdp-cta" data-ctl="${p.id}">${ctl(p)}</div>
           <div class="perks"><div>Delivery in ${BRAND.eta} min<small>From a store near you</small></div><div>Free delivery<small>On orders above ${rs(FREE_DELIVERY)}</small></div></div>
@@ -232,12 +242,19 @@ const pages = {
     const b = bill();
     if (!b.count) return `<div class="wrap">${emptyState('Your cart is empty', 'Add a few items to check out.', '<a class="btn" href="#/">Browse the store</a>')}</div>`;
     if (!state.user || !state.loc) return `<div class="wrap">${emptyState('One more step', 'Log in and set a delivery location to check out.', '<button class="btn" data-act="proceed">Continue</button>')}</div>`;
+    const sh = shop();
+    if (!sh || !sh.open) return `<div class="wrap">${emptyState(sh ? `${esc(sh.name)} is closed right now` : `We don’t deliver to ${esc(state.loc)} yet`, sh ? 'Your cart is saved. Try again when the shop reopens.' : 'Choose one of the areas we serve to place this order.', '<button class="btn" data-act="location">Change area</button>')}</div>`;
     document.title = `Checkout — ${BRAND.name}`;
     const pay = [['upi', 'UPI', 'Any UPI app'], ['card', 'Credit or debit card', 'Visa, Mastercard, RuPay'], ['cod', 'Cash on delivery', 'Pay the rider in cash or UPI']];
     return `<div class="wrap"><h1 class="page-title">Checkout</h1>
       <div class="two">
         <div>
-          <div class="panel"><h2>Deliver to</h2><div class="row"><span>${icon('pin')} ${esc(state.loc)}</span><button class="link" data-act="location">Change</button></div><p class="sub">Arrives in about ${BRAND.eta} minutes · +91 ${esc(state.user.phone)}</p></div>
+          <div class="panel"><h2>Deliver to</h2><div class="row"><span>${icon('pin')} ${esc(state.loc)}</span><button class="link" data-act="location">Change</button></div><div class="addr">
+              <input class="field" data-addr="house" placeholder="House or flat number" aria-label="House or flat number" value="${esc(state.addr.house)}" autocomplete="address-line1">
+              <input class="field" data-addr="street" placeholder="Street, society or block" aria-label="Street, society or block" value="${esc(state.addr.street)}" autocomplete="address-line2">
+              <input class="field" data-addr="landmark" placeholder="Landmark (optional)" aria-label="Landmark, optional" value="${esc(state.addr.landmark)}">
+            </div>
+            <p class="sub">Sold by ${esc(sh.name)} · arrives in about ${BRAND.eta} minutes · +91 ${esc(state.user.phone)}</p></div>
           <div class="panel"><h2>Pay with</h2>${pay.map(([v, l, s]) => `<label class="opt"><input type="radio" name="pay" value="${v}" data-change="pay" ${state.pay === v ? 'checked' : ''}><span>${l}<small>${s}</small></span></label>`).join('')}
             <p class="note" style="margin-top:12px">Demo store: no money is charged.</p></div>
           <div class="panel"><h2>Your items (${b.count})</h2>${b.items.map(x => lineItem(x.p, x.q, true)).join('')}</div>
@@ -251,37 +268,40 @@ const pages = {
     document.title = `Order ${o.id} — ${BRAND.name}`;
     return `<div class="wrap">
       <div class="track-top"><h1 id="t-title"></h1><p id="t-sub"></p>
-        <div class="map"><svg viewBox="0 0 600 220" role="img" aria-label="Map of the delivery route">
+        <div class="map"><svg viewBox="0 0 600 220" role="img" aria-label="Route from the shop to you">
           <rect width="600" height="220" fill="#DDE4F5"/>
           <g stroke="#fff" stroke-width="16" fill="none"><path d="M0 60h600M0 160h600M120 0v220M330 0v220M500 0v220"/></g>
           <g fill="#C9D3EE"><rect x="145" y="80" width="160" height="60" rx="8"/><rect x="355" y="80" width="120" height="60" rx="8"/><rect x="20" y="80" width="75" height="60" rx="8"/><rect x="525" y="80" width="60" height="60" rx="8"/></g>
           <path id="t-path" d="M60 160H330V60H540" fill="none" stroke="#1E3FE6" stroke-width="5" stroke-dasharray="2 10" stroke-linecap="round"/>
           <g transform="translate(60 160)"><circle r="13" fill="#15171C"/><text y="5" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">S</text></g>
           <g transform="translate(540 60)"><circle r="13" fill="#0B7F46"/><path d="M-6 1 0-5l6 6v6h-12z" fill="#fff"/></g>
-          <g class="rider" id="t-rider"><circle r="12" fill="#FFC83A" stroke="#15171C" stroke-width="2.500"/><circle r="3.500" fill="#15171C"/></g>
+          <g class="rider" id="t-rider"><circle r="12" fill="#FFC83A" stroke="#15171C" stroke-width="2.5"/><circle r="3.5" fill="#15171C"/></g>
         </svg></div>
       </div>
       <div class="two">
         <div>
+          <div class="panel" id="t-code"></div>
           <div class="panel"><h2>Order status</h2><ol class="steps" id="t-steps"></ol></div>
-          <div class="panel"><div class="rider-card"><div class="avatar">${o.rider[0]}</div><div><b>${o.rider}</b><p class="sub">Your delivery partner</p></div><button class="btn ghost sm" data-act="call">Call</button></div>
+          <div class="panel"><div class="rider-card" id="t-rider-card"></div>
             <div class="row" style="margin-top:10px"><span class="sub">Need help with this order?</span><button class="link" data-act="help">Get help</button></div></div>
         </div>
-        <div class="panel"><h2>Order ${o.id}</h2><p class="sub">${new Date(o.at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })} · ${esc(o.loc)}</p>
-          ${o.items.map(x => byId[x.id] ? lineItem(byId[x.id], x.q, false) : '').join('')}
-          <div class="row total"><span>Paid by ${{ upi: 'UPI', card: 'card', cod: 'cash on delivery' }[o.pay]}</span><span>${rs(o.total)}</span></div>
+        <div class="panel"><h2>Order ${o.id}</h2><p class="sub">${new Date(o.at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}${o.shopName ? ` · from ${esc(o.shopName)}` : ''}</p>
+          <p class="sub">${esc([o.addr?.house, o.addr?.street, o.addr?.landmark, o.loc].filter(Boolean).join(', '))}</p>
+          ${o.items.map(x => byId[x.id] ? lineItem(byId[x.id], x.q, false, x.price) : '').join('')}
+          <div class="row total"><span>${o.pay === 'cod' ? 'Pay the rider in cash' : `Paid by ${{ upi: 'UPI', card: 'card' }[o.pay]}`}</span><span>${rs(o.total)}</span></div>
           <button class="btn ghost block" style="margin-top:12px" data-act="reorder" data-id="${o.id}">Order again</button>
         </div>
       </div></div>`;
   },
   orders() {
     document.title = `Orders — ${BRAND.name}`;
-    if (!state.orders.length) return `<div class="wrap">${emptyState('No orders yet', 'Your orders will show up here once you place one.', '<a class="btn" href="#/">Start shopping</a>')}</div>`;
-    return `<div class="wrap"><h1 class="page-title">Your orders</h1><div class="sec">${state.orders.map(o => {
-      const done = stageOf(o) === 3;
-      return `<div class="panel order-card"><div><span class="badge ${done ? 'done' : ''}">${STAGES[stageOf(o)]}</span><h2 style="margin:6px 0 2px">Order ${o.id}</h2>
-        <p class="sub">${o.items.reduce((s, x) => s + x.q, 0)} items · ${rs(o.total)} · ${new Date(o.at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</p></div>
-        <div style="display:flex;gap:8px"><a class="btn ghost sm" href="#/order/${o.id}">${done ? 'View' : 'Track'}</a><button class="btn sm" data-act="reorder" data-id="${o.id}">Order again</button></div></div>`;
+    const list = state.orders;
+    if (!list.length) return `<div class="wrap">${emptyState('No orders yet', 'Your orders will show up here once you place one.', '<a class="btn" href="#/">Start shopping</a>')}</div>`;
+    return `<div class="wrap"><h1 class="page-title">Your orders</h1><div class="sec">${list.map(o => {
+      const st = statusOf(o), over = st === 'delivered' || st === 'rejected';
+      return `<div class="panel order-card"><div><span class="badge ${st === 'delivered' ? 'done' : st === 'rejected' ? 'bad' : ''}">${STATUS[st]}</span><h2 style="margin:6px 0 2px">Order ${o.id}</h2>
+        <p class="sub">${o.items.reduce((n, x) => n + x.q, 0)} items · ${rs(o.total)} · ${new Date(o.at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</p></div>
+        <div style="display:flex;gap:8px"><a class="btn ghost sm" href="#/order/${o.id}">${over ? 'View' : 'Track'}</a><button class="btn sm" data-act="reorder" data-id="${o.id}">Order again</button></div></div>`;
     }).join('')}</div></div>`;
   },
   account() {
@@ -299,12 +319,19 @@ const pages = {
     return `<div class="wrap">${emptyState('We couldn’t find that page', 'It may have moved.', '<a class="btn" href="#/">Go to home</a>')}</div>`;
   },
 };
+function serviceNote() {
+  if (!state.loc) return '';
+  const sh = shop();
+  if (!sh) return `<p class="note svc">We don’t deliver to ${esc(state.loc)} yet. You can browse, but pick a served area to order. <button class="link" data-act="location">Change area</button></p>`;
+  if (!sh.open) return `<p class="note svc">${esc(sh.name)} is closed right now. You can browse and order when it reopens.</p>`;
+  return '';
+}
 const tiles = () => `<div class="tiles">${CATS.map(c => `<a class="tile" href="#/c/${c.id}"><div><img loading="lazy" src="${c.img}" alt=""></div>${c.name}</a>`).join('')}</div>`;
 
 function find(q) {
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return [];
-  return PRODUCTS.filter(p => {
+  return catalog().filter(p => {
     const hay = `${p.name} ${p.brand} ${catById[p.cat].name} ${p.sub} ${p.tags || ''}`.toLowerCase();
     return words.every(w => hay.includes(w));
   });
@@ -317,6 +344,7 @@ function route() {
   const seg = path.split('/').filter(Boolean).map(decodeURIComponent);
   page = seg[0] || 'home';
   clearInterval(ticker);
+  refreshInv();
   document.title = `${BRAND.name} — groceries in ${BRAND.eta} minutes`;
   const fn = Object.hasOwn(pages, page) ? pages[page] : pages.notFound;
   $('#app').innerHTML = fn(seg[1], seg[2], new URLSearchParams(qs || ''));
@@ -325,23 +353,39 @@ function route() {
   document.querySelectorAll('#bottomnav a').forEach(a => a.classList.toggle('on', a.dataset.nav === nav));
   $('.tabs a.on')?.scrollIntoView({ block: 'nearest', inline: 'center' });
   if (page !== 'search') { $('#q').value = ''; $('.clear').hidden = true; }
-  if (page === 'order') { const o = state.orders.find(x => x.id === seg[1]); if (o) { tick(o); ticker = setInterval(() => tick(o), 1000); } }
+  if (page === 'order' && $('#t-title')) { tick(seg[1]); ticker = setInterval(() => tick(seg[1]), 2000); }
 }
 function navigate(hash) { if (location.hash === hash) route(); else location.hash = hash; }
 
-/* ---------- Order tracking ---------- */
-const progress = o => Math.min(1, (Date.now() - o.at) / 1000 / TRACK_SECONDS);
-const stageOf = o => { const t = progress(o); return t >= 1 ? 3 : t >= 0.35 ? 2 : t >= 0.12 ? 1 : 0; };
-function tick(o) {
-  const t = progress(o), s = stageOf(o), left = Math.max(1, Math.ceil(BRAND.eta * (1 - t)));
-  if (!$('#t-title')) return clearInterval(ticker);
-  $('#t-title').textContent = s === 3 ? 'Your order has arrived' : `Arriving in ${left} min`;
-  $('#t-sub').textContent = s === 3 ? 'Thanks for ordering. Enjoy!' : `${STAGES[s]} · demo tracking runs faster than real time`;
-  $('#t-steps').innerHTML = STAGES.map((n, i) => `<li class="${i < s || s === 3 ? 'done' : i === s ? 'now' : ''}">${n}</li>`).join('');
-  const path = $('#t-path'), ride = Math.max(0, (t - 0.35) / 0.65);
-  const pt = path.getPointAtLength(path.getTotalLength() * ride);
+/* ---------- Order tracking: driven by what the shop and the rider do in the partner app ---------- */
+function tick(id) {
+  const o = state.orders.find(x => x.id === id);
+  if (!o || !$('#t-title')) return clearInterval(ticker);
+  const st = statusOf(o), at = ORDER_FLOW.indexOf(st), slow = (Date.now() - (o.hist?.[st] || o.at)) / 1000 > SLOW_SECONDS;
+  const refund = o.pay === 'cod' ? 'Nothing was charged.' : 'Your payment will be refunded.';
+  const [title, sub] = {
+    placed: ['Waiting for the shop to accept', slow ? 'The shop is taking longer than usual. We’ve reminded them.' : `${o.shopName || 'The shop'} usually answers within a minute.`],
+    accepted: ['Your order is being packed', `${o.shopName || 'The shop'} is packing your items.`],
+    ready: o.riderName ? ['Your rider is collecting the order', `${o.riderName} is at the shop.`] : ['Packed. Finding a delivery partner', slow ? 'No rider has taken this yet. We’re on it.' : 'A rider will pick it up shortly.'],
+    picked: ['On the way to you', `${o.riderName || 'Your rider'} has your order. Keep your delivery code ready.`],
+    delivered: ['Your order has arrived', 'Thanks for ordering. Enjoy!'],
+    rejected: ['The shop couldn’t take this order', `${o.reason ? o.reason + '. ' : ''}${refund}`],
+  }[st];
+  $('#t-title').textContent = title;
+  $('#t-sub').textContent = sub;
+  $('#t-steps').innerHTML = st === 'rejected'
+    ? '<li class="done">Order placed</li><li class="now">Cancelled by the shop</li>'
+    : STEPS.map(([k, n], i) => `<li class="${i < at || st === 'delivered' ? 'done' : i === at ? 'now' : ''}">${n}</li>`).join('');
+  const live = st !== 'delivered' && st !== 'rejected';
+  $('#t-code').hidden = !live || !o.code;
+  if (o.code) $('#t-code').innerHTML = `<h2>Delivery code</h2><p class="code">${o.code}</p><p class="sub">Tell the rider this code only when the order is in your hands.</p>`;
+  const name = o.riderName || o.rider;
+  $('#t-rider-card').innerHTML = name
+    ? `<div class="avatar">${esc(name[0])}</div><div><b>${esc(name)}</b><p class="sub">Your delivery partner</p></div>${o.riderPhone && live ? `<a class="btn ghost sm" href="tel:+91${esc(o.riderPhone)}">Call</a>` : ''}`
+    : `<div class="avatar">?</div><div><b>No rider yet</b><p class="sub">${live ? 'A delivery partner is assigned once the shop accepts.' : 'No delivery partner was assigned.'}</p></div>`;
+  const path = $('#t-path'), frac = { picked: 0.5, delivered: 1 }[st] || 0; // no live GPS in this version: the dot moves with the status
+  const pt = path.getPointAtLength(path.getTotalLength() * frac);
   $('#t-rider').setAttribute('transform', `translate(${pt.x} ${pt.y})`);
-  if (s === 3) clearInterval(ticker);
 }
 
 /* ---------- Overlay ---------- */
@@ -391,17 +435,23 @@ function openLocation(then) {
 }
 function renderPlaces(q) {
   const t = q.trim().toLowerCase();
-  const hits = PLACES.filter(p => p.toLowerCase().includes(t));
+  const hits = AREAS.filter(p => p.toLowerCase().includes(t));
   const custom = t.length >= 4 && !hits.some(p => p.toLowerCase() === t) ? [q.trim()] : [];
   $('#places').innerHTML = [...hits, ...custom].map(p => `<li><button data-act="place-pick" data-v="${esc(p)}">${icon('pin')}<span>${hits.includes(p) ? esc(p) : `Deliver to “${esc(p)}”`}</span></button></li>`).join('')
     || '<li class="sub" style="padding:12px 6px">Type at least 4 letters to use your own area.</li>';
 }
 function setLoc(v) {
   state.loc = v; store.set('loc', v);
-  syncHeader(); toast(`Delivering to ${v}`);
+  refreshInv();
+  const gone = Object.keys(state.cart).filter(id => stock(byId[id]) <= 0);
+  gone.forEach(id => delete state.cart[id]);
+  Object.keys(state.cart).forEach(id => { state.cart[id] = Math.min(state.cart[id], stock(byId[id])); });
+  store.set('cart', state.cart);
+  syncHeader(); syncCart();
+  toast(gone.length ? `${gone.length} item${gone.length > 1 ? 's aren’t' : ' isn’t'} sold in this area and left your cart` : `Delivering to ${v}`);
   const next = afterAuth; afterAuth = null;
   closeOverlay();
-  if (next) next(); else if (page === 'checkout' || page === 'account') route();
+  if (next) next(); else route();
 }
 function openLogin(then) {
   afterAuth = then || null;
@@ -424,7 +474,8 @@ function openHelp() {
     ['Is there a delivery fee?', `Delivery is free on orders above ${rs(FREE_DELIVERY)}. Below that it’s ${rs(DELIVERY_FEE)}. A ${rs(HANDLING)} handling fee applies to every order.`],
     ['Why can’t I add more than 9 of an item?', `Each item is limited to ${MAX_QTY} per order so stock lasts for everyone nearby.`],
     ['Can I change my address after ordering?', 'Not after the order is packed. Change it in the cart or at checkout before you place the order.'],
-    ['Is this a real store?', 'No. This is a demo: nothing is charged, no text messages are sent and nothing ships.'],
+    ['Why does my area show fewer items?', 'Each area is served by a nearby shop, and you see what that shop has in stock right now.'],
+    ['Is this a real store?', 'Not yet. Payments and text messages are still in demo mode: nothing is charged.'],
   ];
   openOverlay(`<div class="modal" role="dialog" aria-modal="true" aria-label="Help">${mHead('Help')}${faqs.map(([q, a]) => `<details><summary>${q}</summary><p>${a}</p></details>`).join('')}</div>`);
 }
@@ -436,11 +487,23 @@ function proceed() {
   navigate('#/checkout');
 }
 function placeOrder() {
-  const b = bill();
-  if (!b.count) return;
-  const riders = ['Ravi Kumar', 'Imran Sheikh', 'Suresh Yadav', 'Deepak Singh'];
-  const o = { id: 'JP' + String(Date.now()).slice(-6), at: Date.now(), items: b.items.map(x => ({ id: x.p.id, q: x.q })), total: b.total, pay: state.pay, loc: state.loc, rider: riders[Date.now() % riders.length] };
-  state.orders.unshift(o); store.set('orders', state.orders);
+  refreshInv();
+  const b = bill(), sh = shop();
+  if (!b.count || !sh || !sh.open) return route();
+  const missing = ['house', 'street'].find(k => state.addr[k].trim().length < 2);
+  if (missing) { toast(missing === 'house' ? 'Add your house or flat number' : 'Add your street, society or block'); return $(`[data-addr="${missing}"]`)?.focus(); }
+  const short = b.items.find(x => x.q > stock(x.p));
+  if (short) return toast(stock(short.p) > 0 ? `Only ${stock(short.p)} left of ${short.p.name}. Reduce the quantity.` : `${short.p.name} just sold out. Remove it to continue.`);
+  const now = Date.now();
+  const o = {
+    id: 'JP' + String(now).slice(-6), at: now, status: 'placed', hist: { placed: now },
+    shopId: sh.id, shopName: sh.name, shopAddress: sh.address, shopPhone: sh.phone,
+    items: b.items.map(x => ({ id: x.p.id, q: x.q, price: pr(x.p) })), total: b.total, pay: state.pay,
+    loc: state.loc, addr: { ...state.addr }, phone: state.user.phone,
+    code: String(Math.floor(1000 + Math.random() * 9000)), riderId: null, fee: RIDER_FEE,
+  };
+  store.set('orders', [o, ...state.orders]);
+  changeStock(sh.id, o.items, -1); // stock drops the moment the order is placed
   state.cart = {}; store.set('cart', {});
   state.coupon = null; store.set('coupon', null);
   page = 'order'; // so syncCart doesn't re-render checkout
@@ -463,7 +526,7 @@ function suggest(q) {
   $('.clear').hidden = !q;
   if (!q.trim()) { box.hidden = true; return; }
   const mark = name => { const i = name.toLowerCase().indexOf(q.trim().toLowerCase()); return i < 0 ? esc(name) : `${esc(name.slice(0, i))}<b>${esc(name.slice(i, i + q.trim().length))}</b>${esc(name.slice(i + q.trim().length))}`; };
-  box.innerHTML = list.map(p => `<a href="#/p/${p.id}"><img src="${p.img}" alt=""><span>${mark(p.name)}<small>${esc(p.unit)} · ${rs(p.price)}</small></span></a>`).join('')
+  box.innerHTML = list.map(p => `<a href="#/p/${p.id}"><img src="${p.img}" alt=""><span>${mark(p.name)}<small>${esc(p.unit)} · ${rs(pr(p))}</small></span></a>`).join('')
     + `<a class="all" href="#/search?q=${encodeURIComponent(q.trim())}">${list.length ? `See all results for “${esc(q.trim())}”` : `No matches. Search for “${esc(q.trim())}” anyway`}</a>`;
   box.hidden = false;
 }
@@ -480,7 +543,6 @@ const actions = {
   help: () => openHelp(),
   proceed: () => proceed(),
   place: () => placeOrder(),
-  call: () => toast('Calls are switched off in this demo'),
   resend: () => toast('Code sent again'),
   logout: () => { state.user = null; store.set('user', null); syncHeader(); route(); toast('Logged out'); },
   uncoupon: () => { state.coupon = null; store.set('coupon', null); syncCart(); },
@@ -496,7 +558,7 @@ const actions = {
   },
   reorder: el => {
     const o = state.orders.find(x => x.id === el.dataset.id);
-    o.items.forEach(x => { if (byId[x.id]) state.cart[x.id] = Math.min(MAX_QTY, (state.cart[x.id] || 0) + x.q); });
+    o.items.forEach(x => { const max = byId[x.id] ? Math.min(MAX_QTY, stock(byId[x.id])) : 0; if (max > 0) state.cart[x.id] = Math.min(max, (state.cart[x.id] || 0) + x.q); });
     store.set('cart', state.cart); syncCart(); openCart();
   },
 };
@@ -515,6 +577,7 @@ document.addEventListener('input', e => {
   const t = e.target;
   if (t.id === 'q') suggest(t.value);
   if (t.id === 'place-q') renderPlaces(t.value);
+  if (t.dataset.addr) { state.addr[t.dataset.addr] = t.value; store.set('addr', state.addr); }
   if (t.dataset.input) {
     t.value = t.value.replace(/\D/g, '');
     t.form.querySelector('.btn').disabled = t.value.length !== (t.dataset.input === 'phone' ? 10 : 4);
@@ -543,6 +606,15 @@ document.addEventListener('submit', e => {
     if (code !== COUPON.code) { msg.className = 'err'; msg.textContent = code ? 'That code isn’t valid. Check it and try again.' : 'Enter a coupon code.'; return; }
     state.coupon = code; store.set('coupon', code); syncCart();
   }
+});
+// The partner app (another tab) changed stock, prices or an order: show it without a reload.
+window.addEventListener('storage', () => {
+  seedData(); // the partner app's "reset demo data" wipes everything, shops included
+  Object.assign(state, { cart: store.get('cart', {}), user: store.get('user', null), loc: store.get('loc', null), coupon: store.get('coupon', null) });
+  syncHeader();
+  if (page === 'order') return;                      // its own ticker re-reads the order
+  if (page === 'checkout' || !$('#overlay').hidden || document.activeElement?.matches('input, select')) return refreshInv();
+  const y = scrollY; route(); syncCart(); scrollTo(0, y);
 });
 window.addEventListener('hashchange', () => { closeOverlay(); route(); window.scrollTo(0, 0); $('#app').focus({ preventScroll: true }); });
 
