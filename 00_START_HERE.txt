@@ -1,0 +1,86 @@
+START HERE — is folder ko kaise padhna hai
+==========================================
+Banaya: 5 Oct 2026
+
+YEH FOLDER KYA HAI
+------------------
+India ke do quick-commerce apps — Blinkit aur Zepto — ki UI research.
+Do hisse hain:
+  1. Rider (delivery partner) app ka ONBOARDING flow
+  2. Customer app / website ka UI (desktop + mobile)
+
+KIS KAAM KE LIYE
+----------------
+Hum ek gig-partner onboarding app ke liye in-app help videos bana rahe hain:
+onboarding ke har step pe us step ka chhota video dikhega, taaki partner
+atke nahi. Do tarah ke layout soche gaye hain:
+  A. Full-screen video, har step se pehle
+  B. Video form ke upar chalta rahe, aur partner saath-saath form bhare
+     (iske liye screen ka layout video ke hisaab se dobara banana hoga)
+Yeh research usi ke liye reference hai: bade apps onboarding aur mobile
+layout kaise karte hain, aur kya seekhne layak hai.
+
+PEHLE YEH PADHO
+---------------
+README_Research_Report.md  — poori research ek jagah:
+  - Part 1: Customer side UI (comparison table, screen-by-screen,
+            common patterns, user complaints, mobile design)
+  - Part 2: Rider onboarding (Blinkit ~25 screens, Zepto ~18 screens,
+            patterns, pain points)
+  - Sources (saare links)
+
+FOLDER KA DHAANCHA
+------------------
+01_Rider_Onboarding/
+    zepto_rider_onboarding_hub.png   Zepto rider app ka hub screen
+                                     ("Complete in 3 steps")
+02_Customer_UI/
+    Blinkit_PlayStore/   7 images    Play Store listing ke screenshots
+    Zepto_PlayStore/     7 images    (marketing images, asli screens nahi)
+    Blinkit_Web/         5 images    Desktop website: home, category
+                                     (quantity stepper), search, login, footer
+    Zepto_Web/           6 images    Desktop website: home, product rails,
+                                     category, search, product page, login
+    Mobile_Web/          5 images    Phone-size website: Blinkit home,
+                                     category, search; Zepto category,
+                                     product page
+
+YEH RESEARCH KAISE HUI (bharosa kitna karna hai)
+------------------------------------------------
+- Customer UI: live website (desktop aur phone-size) + Play Store
+  screenshots se. Mobile APP ke andar login karke NAHI dekha.
+- Rider onboarding: har app ke ek YouTube walkthrough ke low-res preview
+  frames se + third-party joining guides se. Flow aur layout bharose-layak
+  hain; chhota text aur FEE AMOUNTS approx hain (sources me alag-alag hain).
+- Play Store ke screenshots marketing images hain, asli app screens nahi.
+
+JO NAHI MILA (gaps)
+-------------------
+- Checkout, payment aur live order tracking live nahi dekhe.
+- Blinkit ka cart panel error de raha tha, cart ka UI nahi mila.
+- Zepto ka mobile home aur mobile search capture nahi hua.
+- Rider onboarding ke screens ki images save nahi hain (sirf 1 hub
+  screenshot) — unka breakdown report me text me hai.
+- Asli mobile apps ke bottom tabs / navigation nahi dekhe.
+
+SABSE KAAM KI 6 BAATEIN
+-----------------------
+1. Pehle value dikhao, phir maango: dono apps bina login browse karne
+   dete hain; login me sirf mobile number + OTP.
+2. Ek screen, ek kaam: lambe form nahi. KYC ko chhote steps me todo.
+3. Progress dikhao: Zepto rider ka hub — 3 steps, "10 min" ka vaada,
+   locked steps — sabse achha example hai.
+4. Wajah batao: Blinkit rider Aadhaar pe "5 min vs 1-2 din" dikha ke
+   e-KYC ke liye manata hai, aur us screen pe help video bhi deta hai.
+5. Mobile layout: header patla aur upar chipka hua, main button neeche
+   chipka hua, beech ka hissa scroll. Layout B (form ke upar video) ke
+   liye video ko upar ki sticky patti me rakhna isi se nikalta hai.
+6. Galti rokne ke liye dikhao, likho mat: selfie ke sahi/galat photo
+   examples text instructions se behtar kaam karte hain.
+
+AGAR AAGE KAAM KARNA HO
+-----------------------
+- Layout B ke wireframes banane ho to Mobile_Web/ aur report ka
+  "Mobile design" section dekho.
+- Onboarding steps ka order ya copy sochna ho to report ka Part 2 dekho.
+- Koi number (fee, time) quote karne se pehle Sources se dobara check karo.
