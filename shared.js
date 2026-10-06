@@ -7,19 +7,22 @@ const db = {
   set(k, v) { try { localStorage.setItem('jp_' + k, JSON.stringify(v)); return true; } catch { return false; } },
 };
 
-// Areas the business serves. One city to start with; edit this list for yours.
-const AREAS = ['Sector 50, Gurugram', 'Sector 56, Gurugram', 'Sector 45, Gurugram', 'South City 1, Gurugram', 'DLF Phase 3, Gurugram', 'MG Road, Gurugram', 'Sector 29, Gurugram', 'Sohna Road, Gurugram', 'Golf Course Road, Gurugram', 'Sector 14, Gurugram', 'Palam Vihar, Gurugram', 'Sector 82, Gurugram'];
+// Areas the business serves: Ramnagar (Uttarakhand) and the Jim Corbett belt around it. Edit this list as you grow.
+const AREAS = ['Kosi Road, Ramnagar', 'Ranikhet Road, Ramnagar', 'Lakhanpur, Ramnagar', 'Bhawaniganj, Ramnagar', 'Dhikuli, Ramnagar', 'Garjia, Ramnagar', 'Amdanda, Ramnagar', 'Peerumadara, Ramnagar', 'Chilkiya, Ramnagar', 'Himmatpur, Ramnagar', 'Dhela, Ramnagar', 'Chhoi, Ramnagar'];
+const SEED = 'ramnagar-1'; // bump this when AREAS or the demo shops change, so old demo data is replaced
 const ORDER_FLOW = ['placed', 'accepted', 'ready', 'picked', 'delivered'];
 const RIDER_FEE = 30;       // paid to the rider per delivery
 const SLOW_SECONDS = 120;   // after this long without a response, warn everyone
 
 function seedData() {
-  if (db.get('shops', null)) return;
+  if (db.get('shops', null) && db.get('seed', '') === SEED) return;
+  ['orders', 'partner', 'loc', 'riders', 'requests', 'ticks', 'seen', 'stockcheck', 'cart'].forEach(k => localStorage.removeItem('jp_' + k)); // demo data for the old area list
+  db.set('seed', SEED);
   // Demo shops have no phone number on purpose, so "Call" never dials a stranger.
   const shops = [
-    { id: 's1', name: 'Sharma Kirana Store', owner: 'Mahesh Sharma', phone: '', address: 'Shop 14, Main Market, Sector 50, Gurugram', areas: AREAS.slice(0, 4), open: true, approved: true },
-    { id: 's2', name: 'Gupta General Store', owner: 'Anil Gupta', phone: '', address: 'Shop 3, Galleria Lane, DLF Phase 3, Gurugram', areas: AREAS.slice(4, 7), open: true, approved: true },
-    { id: 's3', name: 'Fresh Basket Mart', owner: 'Sunita Yadav', phone: '', address: 'Shop 21, Vatika Market, Sohna Road, Gurugram', areas: AREAS.slice(7, 10), open: true, approved: true },
+    { id: 's1', name: 'Sharma Kirana Store', owner: 'Mahesh Sharma', phone: '', address: 'Shop 14, Kosi Road, near Bus Stand, Ramnagar, Nainital, Uttarakhand', areas: AREAS.slice(0, 4), open: true, approved: true },
+    { id: 's2', name: 'Corbett General Store', owner: 'Anil Rawat', phone: '', address: 'Shop 3, Main Road, Dhikuli, Ramnagar, Nainital, Uttarakhand', areas: AREAS.slice(4, 7), open: true, approved: true },
+    { id: 's3', name: 'Fresh Basket Mart', owner: 'Sunita Bisht', phone: '', address: 'Shop 21, Kashipur Road, Peerumadara, Ramnagar, Nainital, Uttarakhand', areas: AREAS.slice(7, 10), open: true, approved: true },
   ];
   const inv = {};
   shops.forEach((s, i) => {
